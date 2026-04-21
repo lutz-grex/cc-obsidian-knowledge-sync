@@ -1,0 +1,7 @@
+{
+  "obsidian-vault": {
+    "command": "bun",
+    "args": ["${CLAUDE_PLUGIN_ROOT}/server/dist/index.js"],
+    "env": {}
+  }
+}

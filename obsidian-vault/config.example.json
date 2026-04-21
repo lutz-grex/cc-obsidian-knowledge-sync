@@ -1,0 +1,20 @@
+{
+  "vaults": [
+    {
+      "name": "main",
+      "path": "~/Obsidian/my-vault"
+    }
+  ],
+  "activeVault": "main",
+  "author": "your-name",
+  "transport": "stdio",
+  "teamVault": {
+    "path": "~/Obsidian/team-knowledge",
+    "name": "team",
+    "remote": "origin",
+    "branch": "main",
+    "knowledgeFolder": "Knowledge",
+    "proposalFolder": ".proposals",
+    "requireApproval": true
+  }
+}

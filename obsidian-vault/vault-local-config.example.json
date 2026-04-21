@@ -1,0 +1,12 @@
+{
+  "sessionFolder": "Claude Sessions",
+  "dailyNotesFolder": "Daily Notes",
+  "knowledgeFolder": "Knowledge",
+  "dailyNoteFormat": "YYYY-MM-DD",
+  "trashFolder": ".trash",
+  "defaultTags": ["my-project"],
+  "excludeFolders": [".obsidian", ".trash", "Templates"],
+  "linkToDailyNote": true,
+  "knowledgeMaxLines": 400,
+  "knowledgeMaxHeadings": 10
+}

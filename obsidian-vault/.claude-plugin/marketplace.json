@@ -1,0 +1,15 @@
+{
+  "name": "obsidian-local",
+  "description": "Local Obsidian vault integration plugins",
+  "owner": {
+    "name": "Lutz"
+  },
+  "plugins": [
+    {
+      "name": "obsidian-vault",
+      "source": "./",
+      "description": "Obsidian vault integration — session capture, knowledge synthesis, vault search",
+      "version": "1.0.0"
+    }
+  ]
+}
