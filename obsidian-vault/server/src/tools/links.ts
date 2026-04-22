@@ -8,7 +8,6 @@ import { searchContent } from "../search.js";
 import { escapeRegex } from "../utils.js";
 
 export function registerLinksTools(server: McpServer, ctx: VaultContext, config: ResolvedConfig): void {
-  const vault = ctx.personal;
   // --- get_links ---
   server.tool(
     "get_links",
@@ -18,9 +17,18 @@ export function registerLinksTools(server: McpServer, ctx: VaultContext, config:
       direction: z
         .enum(["backlinks", "outgoing", "both"])
         .describe("Which link direction to retrieve"),
+      vault: z
+        .enum(["personal", "team"])
+        .optional()
+        .default("personal")
+        .describe("Which vault to query"),
     },
-    async ({ path: notePath, direction }) => {
+    async ({ path: notePath, direction, vault: vaultTarget }) => {
+      const vault = await ctx.getVault(vaultTarget);
       const result: { backlinks?: string[]; outgoing?: string[] } = {};
+
+      // Preload file list once for all resolveTarget calls in this request
+      const fileList = await vault.listAllMarkdownFiles();
 
       if (direction === "outgoing" || direction === "both") {
         const content = await vault.readFile(notePath);
@@ -28,7 +36,7 @@ export function registerLinksTools(server: McpServer, ctx: VaultContext, config:
         const sourceDir = path.dirname(notePath);
         const outgoing: string[] = [];
         for (const target of targets) {
-          const resolved = await resolveTarget(vault, target, sourceDir);
+          const resolved = await resolveTarget(vault, target, sourceDir, fileList);
           if (resolved.status === "resolved") {
             outgoing.push(resolved.path!);
           } else if (resolved.status === "ambiguous") {
@@ -59,22 +67,34 @@ export function registerLinksTools(server: McpServer, ctx: VaultContext, config:
           if (m.path !== notePath) candidatePaths.add(m.path);
         }
 
-        // Verify: parse each candidate's links and check if any resolve to notePath
+        // Verify: read candidates in batches and resolve with shared fileList
         const backlinks: string[] = [];
-        for (const candPath of candidatePaths) {
-          try {
-            const candContent = await vault.readFile(candPath);
+        const BATCH = 20;
+        const candidates = [...candidatePaths];
+        for (let i = 0; i < candidates.length; i += BATCH) {
+          const batch = candidates.slice(i, i + BATCH);
+          const reads = await Promise.all(
+            batch.map(async (candPath) => {
+              try {
+                const candContent = await vault.readFile(candPath);
+                return { candPath, candContent };
+              } catch {
+                return null;
+              }
+            })
+          );
+          for (const entry of reads) {
+            if (!entry) continue;
+            const { candPath, candContent } = entry;
             const candTargets = extractAllLinkTargets(candContent);
             const candDir = path.dirname(candPath);
             for (const t of candTargets) {
-              const res = await resolveTarget(vault, t, candDir);
+              const res = await resolveTarget(vault, t, candDir, fileList);
               if (res.status === "resolved" && res.path === notePath) {
                 backlinks.push(candPath);
                 break;
               }
             }
-          } catch {
-            // skip unreadable
           }
         }
         result.backlinks = backlinks.sort();
@@ -106,8 +126,14 @@ export function registerLinksTools(server: McpServer, ctx: VaultContext, config:
       nameOrAlias: z
         .string()
         .describe("Note name, partial path, or alias to resolve"),
+      vault: z
+        .enum(["personal", "team"])
+        .optional()
+        .default("personal")
+        .describe("Which vault to resolve in"),
     },
-    async ({ nameOrAlias }) => {
+    async ({ nameOrAlias, vault: vaultTarget }) => {
+      const vault = await ctx.getVault(vaultTarget);
       const normalized = nameOrAlias.replace(/\.md$/, "");
       const files = await vault.listAllMarkdownFiles();
 

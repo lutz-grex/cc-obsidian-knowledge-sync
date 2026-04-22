@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { escapeRegex, escapeReplacement, localDate, localTime, formatDate, validateAuthor } from "../utils.js";
+import { escapeRegex, escapeReplacement, localDate, localTime, formatDate, validateAuthor, slugify } from "../utils.js";
 
 test("escapeRegex produces valid pattern", () => {
   const input = "price is $100.00 (USD)";
@@ -30,4 +30,10 @@ test("validateAuthor rejects invalid, accepts valid", () => {
   expect(validateAuthor("user\x00name")).not.toBeNull();
   expect(validateAuthor("user<script>")).not.toBeNull();
   expect(validateAuthor("Alice Bob")).toBeNull();
+});
+
+test("slugify trims multi-dash and respects maxLen", () => {
+  expect(slugify("---test---")).toBe("test");
+  expect(slugify("a".repeat(100), 50).length).toBe(50);
+  expect(slugify("a   b---c")).toBe("a-b-c");
 });

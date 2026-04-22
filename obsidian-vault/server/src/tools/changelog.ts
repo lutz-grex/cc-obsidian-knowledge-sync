@@ -86,7 +86,7 @@ export function registerChangelogTools(server: McpServer, ctx: VaultContext, _co
         .describe("Which vault to check"),
     },
     async ({ days, author, path: pathFilter, limit, vault: vaultTarget }) => {
-      const vault = ctx.getVault(vaultTarget);
+      const vault = await ctx.getVault(vaultTarget);
 
       // Verify the vault is a git repo
       try {
@@ -115,8 +115,15 @@ export function registerChangelogTools(server: McpServer, ctx: VaultContext, _co
           };
         }
 
+        const MAX_FILES_PER_COMMIT = 8;
         const lines = commits.map((c) => {
-          const filesStr = c.files.length > 0 ? `\n  files: ${c.files.join(", ")}` : "";
+          let filesStr = "";
+          if (c.files.length > 0) {
+            const shown = c.files.slice(0, MAX_FILES_PER_COMMIT);
+            const overflow = c.files.length - shown.length;
+            filesStr = `\n  files: ${shown.join(", ")}`;
+            if (overflow > 0) filesStr += ` +${overflow} more`;
+          }
           return `${c.shortHash} ${c.date.slice(0, 10)} ${c.author}: ${c.subject}${filesStr}`;
         });
 

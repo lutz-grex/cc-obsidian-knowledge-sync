@@ -170,21 +170,44 @@ export interface ResolveResult {
 }
 
 /**
- * Resolve a link target to a canonical vault path.
- * Resolution order: source-relative → vault-root → basename match.
- * Returns structured result where ambiguity is first-class.
+ * Prebuilt lookup maps for fast in-memory resolution.
+ * Build once with `buildResolverIndex()` and pass to `resolveTarget()`.
  */
+export interface ResolverIndex {
+  /** All vault paths for O(1) existence checks. */
+  pathSet: Set<string>;
+  /** basename (no .md) → array of full relative paths. */
+  basenameMap: Map<string, string[]>;
+}
+
+/** Build a ResolverIndex from a list of vault file paths. */
+export function buildResolverIndex(paths: Iterable<string>): ResolverIndex {
+  const pathSet = new Set<string>();
+  const basenameMap = new Map<string, string[]>();
+  for (const p of paths) {
+    pathSet.add(p);
+    const base = p.split("/").pop()?.replace(/\.md$/, "") || p;
+    const existing = basenameMap.get(base);
+    if (existing) { existing.push(p); } else { basenameMap.set(base, [p]); }
+  }
+  return { pathSet, basenameMap };
+}
+
 /**
  * Resolve a link target to a canonical vault path.
- * Pass `fileList` to avoid repeated filesystem walks in batch operations (lint, graph).
+ * Resolution order: source-relative → vault-root → path-suffix → basename.
+ *
+ * Pass `fileList` to avoid repeated filesystem walks in batch operations.
+ * Pass `index` (from `buildResolverIndex`) for fully in-memory resolution (no I/O).
  */
 export async function resolveTarget(
   vault: Vault,
   target: string,
   sourceDir?: string,
-  fileList?: Array<{ path: string }>
+  fileList?: Array<{ path: string }>,
+  index?: ResolverIndex
 ): Promise<ResolveResult> {
-  // Strip anchors and aliases defensively (callers should already strip, but be safe)
+  // Strip anchors and aliases defensively
   const clean = target.replace(/[#|].*$/, "");
   if (!clean) return { status: "missing" };
   const stripped = clean.replace(/\.md$/, "");
@@ -193,40 +216,63 @@ export async function resolveTarget(
   // 1. Source-relative resolution
   if (sourceDir) {
     for (const candidate of [path.join(sourceDir, withMd), path.join(sourceDir, clean)]) {
+      if (index) {
+        if (index.pathSet.has(candidate)) return { status: "resolved", path: candidate };
+      } else {
+        try {
+          if (await vault.exists(candidate)) return { status: "resolved", path: candidate };
+        } catch { /* traversal rejection */ }
+      }
+    }
+  }
+
+  // 2. Vault-root-relative resolution
+  for (const candidate of [withMd, clean]) {
+    if (index) {
+      if (index.pathSet.has(candidate)) return { status: "resolved", path: candidate };
+    } else {
       try {
         if (await vault.exists(candidate)) return { status: "resolved", path: candidate };
       } catch { /* traversal rejection */ }
     }
   }
 
-  // 2. Vault-root-relative resolution
-  for (const candidate of [withMd, clean]) {
-    try {
-      if (await vault.exists(candidate)) return { status: "resolved", path: candidate };
-    } catch { /* traversal rejection */ }
-  }
-
-  // 3. Basename + suffix match (use provided file list to avoid repeated walks)
-  const files = fileList || await vault.listAllMarkdownFiles();
+  // 3. Basename + suffix match
   const baseName = stripped.split("/").pop() || stripped;
 
-  // Try path-suffix match first (more specific than basename)
-  if (stripped.includes("/")) {
-    const suffixMatches = files.filter((f) => {
-      const normalized = f.path.replace(/\.md$/, "");
-      return normalized === stripped || normalized.endsWith(`/${stripped}`);
-    });
-    if (suffixMatches.length === 1) return { status: "resolved", path: suffixMatches[0].path };
-    if (suffixMatches.length > 1) return { status: "ambiguous", candidates: suffixMatches.map((m) => m.path) };
-  }
+  if (index) {
+    // Fast path: use prebuilt maps
+    if (stripped.includes("/")) {
+      const candidates = (index.basenameMap.get(baseName) || []).filter((p) => {
+        const normalized = p.replace(/\.md$/, "");
+        return normalized === stripped || normalized.endsWith(`/${stripped}`);
+      });
+      if (candidates.length === 1) return { status: "resolved", path: candidates[0] };
+      if (candidates.length > 1) return { status: "ambiguous", candidates };
+    }
+    const matches = index.basenameMap.get(baseName) || [];
+    if (matches.length === 1) return { status: "resolved", path: matches[0] };
+    if (matches.length > 1) return { status: "ambiguous", candidates: matches };
+  } else {
+    // Fallback: scan file list
+    const files = fileList || await vault.listAllMarkdownFiles();
 
-  // Fall back to basename match
-  const basenameMatches = files.filter((f) => {
-    const fName = f.path.split("/").pop()?.replace(/\.md$/, "") || "";
-    return fName === baseName;
-  });
-  if (basenameMatches.length === 1) return { status: "resolved", path: basenameMatches[0].path };
-  if (basenameMatches.length > 1) return { status: "ambiguous", candidates: basenameMatches.map((m) => m.path) };
+    if (stripped.includes("/")) {
+      const suffixMatches = files.filter((f) => {
+        const normalized = f.path.replace(/\.md$/, "");
+        return normalized === stripped || normalized.endsWith(`/${stripped}`);
+      });
+      if (suffixMatches.length === 1) return { status: "resolved", path: suffixMatches[0].path };
+      if (suffixMatches.length > 1) return { status: "ambiguous", candidates: suffixMatches.map((m) => m.path) };
+    }
+
+    const basenameMatches = files.filter((f) => {
+      const fName = f.path.split("/").pop()?.replace(/\.md$/, "") || "";
+      return fName === baseName;
+    });
+    if (basenameMatches.length === 1) return { status: "resolved", path: basenameMatches[0].path };
+    if (basenameMatches.length > 1) return { status: "ambiguous", candidates: basenameMatches.map((m) => m.path) };
+  }
 
   return { status: "missing" };
 }

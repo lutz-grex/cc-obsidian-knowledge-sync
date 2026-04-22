@@ -12,6 +12,7 @@ import { registerLintTools } from "./tools/lint.js";
 import { registerDailyQueryTools } from "./tools/daily-query.js";
 import { registerGraphTools } from "./tools/graph.js";
 import { registerChangelogTools } from "./tools/changelog.js";
+import { registerImportTools } from "./tools/import.js";
 
 export function createServer(ctx: VaultContext, config: ResolvedConfig): McpServer {
   const server = new McpServer({
@@ -30,6 +31,7 @@ export function createServer(ctx: VaultContext, config: ResolvedConfig): McpServ
   registerDailyQueryTools(server, ctx, config);
   registerGraphTools(server, ctx, config);
   registerChangelogTools(server, ctx, config);
+  registerImportTools(server, ctx, config);
 
   // Team tools (only registered when team vault is configured)
   if (ctx.hasTeam) {

@@ -176,7 +176,11 @@ async function validateGitRepo(repoPath: string, remote: string): Promise<boolea
   }
 }
 
-async function resolveTeamVault(userConfig: UserConfig | null): Promise<ResolvedTeamConfig | null> {
+/**
+ * Resolve team vault configuration without git validation.
+ * Returns config if path exists; git validation is deferred to first use.
+ */
+function resolveTeamVaultConfig(userConfig: UserConfig | null): ResolvedTeamConfig | null {
   const envTeamPath = process.env.OBSIDIAN_TEAM_VAULT_PATH;
   const teamConfig = userConfig?.teamVault;
 
@@ -192,14 +196,6 @@ async function resolveTeamVault(userConfig: UserConfig | null): Promise<Resolved
     return null;
   }
 
-  const isGit = await validateGitRepo(teamPath, remote);
-  if (!isGit) {
-    process.stderr.write(
-      `[team-vault] Not a valid git repo or remote "${remote}" not found: ${teamPath}\n`
-    );
-    return null;
-  }
-
   return {
     vaultPath: teamPath,
     vaultName: name,
@@ -209,6 +205,20 @@ async function resolveTeamVault(userConfig: UserConfig | null): Promise<Resolved
     proposalFolder: teamConfig?.proposalFolder || ".proposals",
     requireApproval: teamConfig?.requireApproval ?? true,
   };
+}
+
+/**
+ * Validate that the team vault is a proper git repo. Call lazily on first team tool use.
+ */
+export async function validateTeamVault(team: ResolvedTeamConfig): Promise<boolean> {
+  const isGit = await validateGitRepo(team.vaultPath, team.remote);
+  if (!isGit) {
+    process.stderr.write(
+      `[team-vault] Not a valid git repo or remote "${team.remote}" not found: ${team.vaultPath}\n`
+    );
+    return false;
+  }
+  return true;
 }
 
 // ─── Main Resolution ─────────────────────────────────────────────────────────
@@ -245,8 +255,8 @@ export async function resolveConfig(): Promise<ResolvedConfig> {
   // Layer 3: Vault-local config
   const vaultLocal = await loadVaultLocalConfig(vaultPath);
 
-  // Resolve team vault (graceful — returns null if not configured or invalid)
-  const team = await resolveTeamVault(userConfig);
+  // Resolve team vault config without git validation (deferred to first use)
+  const team = resolveTeamVaultConfig(userConfig);
 
   // Merge: vault-local overrides defaults
   const resolved: ResolvedConfig = {

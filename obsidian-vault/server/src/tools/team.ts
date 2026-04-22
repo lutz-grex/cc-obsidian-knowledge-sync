@@ -12,7 +12,7 @@ import {
   fmStringArray,
   fmNumber,
 } from "../schemas.js";
-import { localDate, localTime } from "../utils.js";
+import { localDate, localTime, slugify } from "../utils.js";
 
 export function registerTeamTools(server: McpServer, ctx: VaultContext, config: ResolvedConfig): void {
   if (!config.team) return;
@@ -33,6 +33,9 @@ export function registerTeamTools(server: McpServer, ctx: VaultContext, config: 
         .describe("Commit message (required for 'push')"),
     },
     async ({ action, message }) => {
+      // Validate team vault is a proper git repo (deferred, cached)
+      await ctx.getVault("team");
+
       switch (action) {
         case "status": {
           const status = await gitSync.status();
@@ -192,7 +195,7 @@ export function registerTeamTools(server: McpServer, ctx: VaultContext, config: 
         .describe("One-line summary of what this contributes"),
     },
     async ({ sourcePath, topicId, targetPath, mode, summary }) => {
-      const teamVault = ctx.getVault("team");
+      const teamVault = await ctx.getVault("team");
       const teamConfig = config.team!;
       const author = config.author || "unknown";
 
@@ -424,7 +427,7 @@ export function registerTeamTools(server: McpServer, ctx: VaultContext, config: 
         .describe("Optional message for approve/reject"),
     },
     async ({ action, proposalPath, message: actionMessage }) => {
-      const teamVault = ctx.getVault("team");
+      const teamVault = await ctx.getVault("team");
       const teamConfig = config.team!;
       const author = config.author || "unknown";
 
@@ -669,11 +672,4 @@ export function registerTeamTools(server: McpServer, ctx: VaultContext, config: 
   );
 }
 
-/** Convert a string to a URL-safe kebab-case slug. */
-function slugify(str: string): string {
-  return str
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
-}
+// slugify imported from utils.ts

@@ -9,6 +9,8 @@ export class Vault {
   readonly root: string;
   private readonly realRoot: string;
   readonly config: ResolvedConfig;
+  /** Monotonically increasing counter; bumped on every write/delete. Used by vault-index cache. */
+  writeGeneration = 0;
 
   constructor(config: ResolvedConfig) {
     this.root = config.vaultPath;
@@ -61,6 +63,7 @@ export class Vault {
     const abs = this.resolve(relativePath);
     await fs.mkdir(path.dirname(abs), { recursive: true });
     await fs.writeFile(abs, content, "utf-8");
+    this.writeGeneration++;
     return abs;
   }
 
@@ -76,6 +79,7 @@ export class Vault {
     } else {
       await fs.unlink(abs);
     }
+    this.writeGeneration++;
   }
 
   /** Move/rename a file within the vault. */
@@ -84,6 +88,7 @@ export class Vault {
     const newAbs = this.resolve(newRelPath);
     await fs.mkdir(path.dirname(newAbs), { recursive: true });
     await fs.rename(oldAbs, newAbs);
+    this.writeGeneration++;
   }
 
   /** Recursively list all markdown files with no cap. Use for full-vault operations. */
@@ -117,17 +122,27 @@ export class Vault {
         return;
       }
 
+      const mdFiles: { fullPath: string; relPath: string }[] = [];
       for (const entry of entries) {
-        if (results.length >= limit) return;
+        if (results.length + mdFiles.length >= limit) break;
         const fullPath = path.join(dir, entry.name);
-        const relPath = this.relative(fullPath);
 
         if (entry.isDirectory()) {
           if (this.config.excludeFolders.includes(entry.name)) continue;
           if (recursive) await walk(fullPath);
         } else if (entry.isFile() && entry.name.endsWith(".md")) {
-          const stat = await fs.stat(fullPath);
-          results.push({ path: relPath, size: stat.size, mtime: stat.mtime });
+          mdFiles.push({ fullPath, relPath: this.relative(fullPath) });
+        }
+      }
+
+      // Batch stat calls for all markdown files in this directory
+      const STAT_BATCH = 50;
+      for (let s = 0; s < mdFiles.length; s += STAT_BATCH) {
+        if (results.length >= limit) break;
+        const batch = mdFiles.slice(s, s + STAT_BATCH);
+        const stats = await Promise.all(batch.map((f) => fs.stat(f.fullPath)));
+        for (let j = 0; j < batch.length && results.length < limit; j++) {
+          results.push({ path: batch[j].relPath, size: stats[j].size, mtime: stats[j].mtime });
         }
       }
     };
@@ -198,6 +213,7 @@ export class Vault {
         return;
       }
 
+      const mdFiles: { fullPath: string; relPath: string }[] = [];
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
         if (entry.isDirectory()) {
@@ -205,10 +221,19 @@ export class Vault {
           folders++;
           await walk(fullPath);
         } else if (entry.isFile() && entry.name.endsWith(".md")) {
-          const stat = await fs.stat(fullPath);
+          mdFiles.push({ fullPath, relPath: this.relative(fullPath) });
+        }
+      }
+
+      // Batch stat calls
+      const STAT_BATCH = 50;
+      for (let s = 0; s < mdFiles.length; s += STAT_BATCH) {
+        const batch = mdFiles.slice(s, s + STAT_BATCH);
+        const stats = await Promise.all(batch.map((f) => fs.stat(f.fullPath)));
+        for (let j = 0; j < batch.length; j++) {
           noteCount++;
-          totalSizeBytes += stat.size;
-          recent.push({ path: this.relative(fullPath), mtime: stat.mtime });
+          totalSizeBytes += stats[j].size;
+          recent.push({ path: batch[j].relPath, mtime: stats[j].mtime });
         }
       }
     };

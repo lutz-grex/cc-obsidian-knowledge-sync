@@ -69,7 +69,7 @@ export function appendUnderHeading(
     if (nextMatch && nextMatch.index !== undefined) {
       // Insert before next heading
       const insertPos = section.start + match[0].length + nextMatch.index;
-      return body.slice(0, insertPos) + content + "\n\n" + body.slice(insertPos);
+      return body.slice(0, insertPos) + content + trailingSeparator + body.slice(insertPos);
     }
     // No next heading — append at end
     return body.trimEnd() + trailingSeparator + content + "\n";

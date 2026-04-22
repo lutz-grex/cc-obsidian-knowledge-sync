@@ -12,11 +12,11 @@ async function main(): Promise<void> {
 
   let teamVault: Vault | null = null;
   if (config.team) {
-    const teamConfig = buildTeamVaultConfig(config);
-    teamVault = new Vault(teamConfig);
+    const teamVaultConfig = buildTeamVaultConfig(config);
+    teamVault = new Vault(teamVaultConfig);
   }
 
-  const context = new VaultContext(personalVault, teamVault);
+  const context = new VaultContext(personalVault, teamVault, config.team);
   const server = createServer(context, config);
 
   const transport = new StdioServerTransport();

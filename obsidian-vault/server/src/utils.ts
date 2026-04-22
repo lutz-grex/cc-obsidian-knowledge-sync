@@ -53,6 +53,11 @@ export function parseDateString(s: string): Date {
   return date;
 }
 
+/** Convert a string to a URL-safe kebab-case slug. */
+export function slugify(s: string, maxLen = 80): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, maxLen);
+}
+
 /** Validate a git author string: must be non-empty, no control chars, no angle brackets. */
 export function validateAuthor(author: string): string | null {
   if (!author || author.trim().length === 0) return "Author must not be empty";

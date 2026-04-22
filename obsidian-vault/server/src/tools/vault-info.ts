@@ -32,7 +32,7 @@ export function registerVaultInfoTools(server: McpServer, ctx: VaultContext, con
         .describe("Which vault to query (requires team vault configured)"),
     },
     async ({ action, folder, limit, depth, vault: vaultTarget }) => {
-      const targetVault = ctx.getVault(vaultTarget);
+      const targetVault = await ctx.getVault(vaultTarget);
       switch (action) {
         case "list": {
           const files = await targetVault.listMarkdownFiles(folder || "", true, limit);

@@ -10,7 +10,6 @@ import { escapeRegex } from "../utils.js";
 import { appendUnderHeading } from "../sections.js";
 
 export function registerFileOpsTools(server: McpServer, ctx: VaultContext, config: ResolvedConfig): void {
-  const vault = ctx.personal;
   // --- read_note ---
   server.tool(
     "read_note",
@@ -29,7 +28,7 @@ export function registerFileOpsTools(server: McpServer, ctx: VaultContext, confi
         .describe("Which vault to read from (requires team vault configured)"),
     },
     async ({ path: notePath, parseFrontmatter, vault: vaultTarget }) => {
-      const targetVault = ctx.getVault(vaultTarget);
+      const targetVault = await ctx.getVault(vaultTarget);
       const content = await targetVault.readFile(notePath);
 
       if (parseFrontmatter) {
@@ -44,8 +43,6 @@ export function registerFileOpsTools(server: McpServer, ctx: VaultContext, confi
                   frontmatter: parsed.frontmatter,
                   body: parsed.body,
                 },
-                null,
-                2
               ),
             },
           ],
@@ -76,6 +73,7 @@ export function registerFileOpsTools(server: McpServer, ctx: VaultContext, confi
         .describe("Overwrite if file already exists"),
     },
     async ({ path: notePath, content, frontmatter, overwrite }) => {
+      const vault = ctx.personal;
       if (!overwrite && (await vault.exists(notePath))) {
         return {
           content: [{ type: "text" as const, text: `Error: File already exists: ${notePath}. Use overwrite=true to replace.` }],
@@ -119,6 +117,7 @@ export function registerFileOpsTools(server: McpServer, ctx: VaultContext, confi
         .describe("For 'append': insert content under this heading. Creates heading if not found."),
     },
     async ({ path: notePath, operation, oldString, newString, content: newContent, heading }) => {
+      const vault = ctx.personal;
       const existing = await vault.readFile(notePath);
       let updated: string;
 
@@ -196,6 +195,7 @@ export function registerFileOpsTools(server: McpServer, ctx: VaultContext, confi
         .describe("Move to .trash/ instead of permanent delete"),
     },
     async ({ path: notePath, trash }) => {
+      const vault = ctx.personal;
       if (!(await vault.exists(notePath))) {
         return {
           content: [{ type: "text" as const, text: `Error: File not found: ${notePath}` }],
@@ -225,6 +225,7 @@ export function registerFileOpsTools(server: McpServer, ctx: VaultContext, confi
         .describe("Rewrite wikilinks in other notes that pointed to the old path"),
     },
     async ({ oldPath, newPath, updateLinks }) => {
+      const vault = ctx.personal;
       if (!(await vault.exists(oldPath))) {
         return {
           content: [{ type: "text" as const, text: `Error: Source not found: ${oldPath}` }],
@@ -243,62 +244,72 @@ export function registerFileOpsTools(server: McpServer, ctx: VaultContext, confi
         const oldRelPath = oldPath.replace(/\.md$/, "");
         const newRelPath = newPath.replace(/\.md$/, "");
 
-        // Broad search: wikilinks (basename + path) and markdown links (basename + path)
-        const searches = [
-          searchContent(vault, `\\[\\[${escapeRegex(oldName)}`, { limit: 500, regex: true }),
-          searchContent(vault, `\\]\\(${escapeRegex(oldName)}\\.md`, { limit: 500, regex: true }),
-        ];
-        if (oldRelPath !== oldName) {
-          searches.push(searchContent(vault, `\\[\\[${escapeRegex(oldRelPath)}`, { limit: 500, regex: true }));
-          searches.push(searchContent(vault, `\\]\\(${escapeRegex(oldRelPath)}\\.md`, { limit: 500, regex: true }));
-        }
-        const searchResults = await Promise.all(searches);
+        // Single combined regex search to find all candidate files in one ripgrep call
+        const namePattern = escapeRegex(oldName);
+        const pathPattern = oldRelPath !== oldName ? escapeRegex(oldRelPath) : null;
+        const combinedPattern = pathPattern
+          ? `(\\[\\[(${namePattern}|${pathPattern})|\\]\\((${namePattern}|${pathPattern})\\.md)`
+          : `(\\[\\[${namePattern}|\\]\\(${namePattern}\\.md)`;
+        const searchResults = await searchContent(vault, combinedPattern, { limit: 500, regex: true });
 
-        const allBacklinks = new Map<string, (typeof searchResults)[0][0]>();
-        for (const r of searchResults.flat()) {
-          allBacklinks.set(r.path, r);
+        const candidatePaths = new Set<string>();
+        for (const r of searchResults) {
+          if (r.path !== newPath) candidatePaths.add(r.path);
         }
 
-        // Parse-and-resolve: only rewrite links proven to point to the moved file
-        for (const result of allBacklinks.values()) {
-          if (result.path === newPath) continue;
-          try {
-            const content = await vault.readFile(result.path);
-            const targets = extractAllLinkTargets(content);
-            const candDir = path.dirname(result.path);
+        // Preload file list once for all resolveTarget calls
+        const fileList = await vault.listAllMarkdownFiles();
 
-            // Only rewrite links individually proven to point to the moved file
-            let rewritten = content;
-            for (const t of targets) {
-              const res = await resolveTarget(vault, t, candDir);
-              const tName = t.split("/").pop()?.replace(/\.md$/, "") || "";
-              const shouldRewrite =
-                (res.status === "resolved" && res.path === newPath) ||
-                (res.status === "missing" && tName === oldName);
+        // Process candidates in parallel batches
+        const BATCH = 20;
+        const candidates = [...candidatePaths];
+        for (let i = 0; i < candidates.length; i += BATCH) {
+          const batch = candidates.slice(i, i + BATCH);
+          const results = await Promise.all(
+            batch.map(async (candPath) => {
+              try {
+                const content = await vault.readFile(candPath);
+                const targets = extractAllLinkTargets(content);
+                const candDir = path.dirname(candPath);
 
-              if (res.status === "ambiguous") {
-                linksAmbiguous++;
-                continue;
+                let rewritten = content;
+                let ambiguous = 0;
+                for (const t of targets) {
+                  const res = await resolveTarget(vault, t, candDir, fileList);
+                  const tName = t.split("/").pop()?.replace(/\.md$/, "") || "";
+                  const shouldRewrite =
+                    (res.status === "resolved" && res.path === newPath) ||
+                    (res.status === "missing" && tName === oldName);
+
+                  if (res.status === "ambiguous") {
+                    ambiguous++;
+                    continue;
+                  }
+                  if (!shouldRewrite) continue;
+
+                  if (t.includes("/")) {
+                    const tNoMd = t.replace(/\.md$/, "");
+                    rewritten = rewriteLinks(rewritten, tName, newName, tNoMd, newRelPath);
+                  } else {
+                    rewritten = rewriteLinks(rewritten, t.replace(/\.md$/, ""), newName, oldRelPath, newRelPath);
+                  }
+                }
+                return { candPath, content, rewritten, ambiguous };
+              } catch (err: unknown) {
+                process.stderr.write(`[move_note] skipped backlink update for ${candPath}: ${err}\n`);
+                return { candPath, content: null, rewritten: null, ambiguous: 0 };
               }
-              if (!shouldRewrite) continue;
+            })
+          );
 
-              // Rewrite only this specific link target, not all basename matches
-              if (t.includes("/")) {
-                // Path-qualified: rewrite the exact path form
-                const tNoMd = t.replace(/\.md$/, "");
-                rewritten = rewriteLinks(rewritten, tName, newName, tNoMd, newRelPath);
-              } else {
-                // Basename-only: always pass path args so folder moves are rewritten
-                rewritten = rewriteLinks(rewritten, t.replace(/\.md$/, ""), newName, oldRelPath, newRelPath);
-              }
-            }
-            if (rewritten !== content) {
-              await vault.writeFile(result.path, rewritten);
+          for (const r of results) {
+            linksAmbiguous += r.ambiguous;
+            if (!r.content) {
+              linksSkipped++;
+            } else if (r.rewritten !== r.content) {
+              await vault.writeFile(r.candPath, r.rewritten!);
               linksUpdated++;
             }
-          } catch (err: unknown) {
-            linksSkipped++;
-            process.stderr.write(`[move_note] skipped backlink update for ${result.path}: ${err}\n`);
           }
         }
       }

@@ -12,11 +12,14 @@
     "typecheck": "tsc --noEmit",
     "start": "bun dist/index.js",
     "dev": "tsc --watch",
-    "setup": "bun install && bun run build"
+    "setup": "bun install && bun run build",
+    "test": "bun test",
+    "check": "bun run typecheck && bun test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "yaml": "^2.8.3"
+    "yaml": "^2.8.3",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",

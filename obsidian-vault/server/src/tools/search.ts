@@ -5,7 +5,6 @@ import type { ResolvedConfig } from "../config.js";
 import { searchContent, searchFilename, searchFrontmatter } from "../search.js";
 
 export function registerSearchTools(server: McpServer, ctx: VaultContext, config: ResolvedConfig): void {
-  const vault = ctx.personal;
   server.tool(
     "search",
     "Search the vault by content (ripgrep), filename (glob), or frontmatter fields.",
@@ -32,19 +31,24 @@ export function registerSearchTools(server: McpServer, ctx: VaultContext, config
         .optional()
         .default(20)
         .describe("Maximum number of results"),
+      regex: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe("Use regex instead of fixed-string matching for content search"),
       vault: z
         .enum(["personal", "team"])
         .optional()
         .default("personal")
         .describe("Which vault to search (requires team vault configured)"),
     },
-    async ({ query, mode, field, operator, folder, limit, vault: vaultTarget }) => {
-      const targetVault = ctx.getVault(vaultTarget);
+    async ({ query, mode, field, operator, folder, limit, regex, vault: vaultTarget }) => {
+      const targetVault = await ctx.getVault(vaultTarget);
       let results;
 
       switch (mode) {
         case "content":
-          results = await searchContent(targetVault, query, { folder, limit });
+          results = await searchContent(targetVault, query, { folder, limit, regex });
           break;
         case "filename":
           results = await searchFilename(targetVault, query, { folder, limit });
@@ -67,17 +71,15 @@ export function registerSearchTools(server: McpServer, ctx: VaultContext, config
       }
 
       const formatted = results.map((r) => {
-        let entry = `- ${r.path}`;
-        if (r.snippet) entry += `\n  ${r.snippet}`;
-        if (r.lineNumber) entry += ` (line ${r.lineNumber})`;
-        return entry;
+        const loc = r.lineNumber ? `${r.path}:${r.lineNumber}` : r.path;
+        return r.snippet ? `${loc} | ${r.snippet}` : loc;
       });
 
       return {
         content: [
           {
             type: "text" as const,
-            text: `Found ${results.length} result(s) for "${query}" (mode: ${mode}):\n\n${formatted.join("\n")}`,
+            text: formatted.join("\n"),
           },
         ],
       };

@@ -36,8 +36,8 @@ export function registerLintTools(server: McpServer, ctx: VaultContext, _config:
         .describe("Which vault to lint"),
     },
     async ({ checks, folder, requiredFields, limit, vault: vaultTarget }) => {
-      const vault = ctx.getVault(vaultTarget);
-      const index = await buildVaultIndex(vault, folder);
+      const vault = await ctx.getVault(vaultTarget);
+      const { index, skipped } = await buildVaultIndex(vault, folder);
       const diagnostics: LintDiagnostic[] = [];
 
       const checksSet = new Set(checks);
@@ -120,7 +120,8 @@ export function registerLintTools(server: McpServer, ctx: VaultContext, _config:
 
       const trimmed = diagnostics.slice(0, limit);
       const summary = `${trimmed.length} diagnostic(s) found` +
-        (trimmed.length < diagnostics.length ? ` (showing first ${limit} of ${diagnostics.length})` : "");
+        (trimmed.length < diagnostics.length ? ` (showing first ${limit} of ${diagnostics.length})` : "") +
+        (skipped.length > 0 ? ` (${skipped.length} file(s) skipped due to read/parse errors)` : "");
 
       const lines = trimmed.map((d) => `[${d.check}] ${d.path}: ${d.message}`);
 

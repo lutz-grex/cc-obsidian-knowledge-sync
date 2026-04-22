@@ -4,7 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { VaultContext } from "../vault-context.js";
 import type { ResolvedConfig } from "../config.js";
 import { buildVaultIndex } from "../vault-index.js";
-import { resolveTarget } from "../wikilinks.js";
+import { resolveTarget, buildResolverIndex } from "../wikilinks.js";
 import { parseNote } from "../frontmatter.js";
 
 interface GraphNode {
@@ -20,7 +20,8 @@ interface GraphEdge {
   status: "resolved" | "missing" | "ambiguous";
 }
 
-const MAX_NODES = 200;
+const DEFAULT_MAX_NODES = 80;
+const MAX_CONTENT_CHARS = 300;
 
 export function registerGraphTools(server: McpServer, ctx: VaultContext, _config: ResolvedConfig): void {
   server.tool(
@@ -34,30 +35,33 @@ export function registerGraphTools(server: McpServer, ctx: VaultContext, _config
         .optional()
         .default("both")
         .describe("Edge direction to follow"),
-      includeContent: z.boolean().optional().default(false).describe("Include note body in each node"),
+      includeContent: z.boolean().optional().default(false).describe("Include note body excerpt for root and depth-1 nodes only"),
+      maxNodes: z.number().min(1).max(200).optional().default(DEFAULT_MAX_NODES).describe("Max nodes to return (default 80, max 200)"),
       vault: z
         .enum(["personal", "team"])
         .optional()
         .default("personal")
         .describe("Which vault to graph"),
     },
-    async ({ path: startPath, depth, direction, includeContent, vault: vaultTarget }) => {
-      const vault = ctx.getVault(vaultTarget);
-      const index = await buildVaultIndex(vault);
+    async ({ path: startPath, depth, direction, includeContent, maxNodes, vault: vaultTarget }) => {
+      const vault = await ctx.getVault(vaultTarget);
+      const { index, skipped } = await buildVaultIndex(vault);
 
       // Build adjacency: outgoing and incoming edges in one pass
       const outgoing = new Map<string, string[]>(); // path → resolved target paths
       const incoming = new Map<string, string[]>(); // path → source paths that link here
       const edgeStatus = new Map<string, "resolved" | "missing" | "ambiguous">(); // "source→target" → status
 
-      const fileList = [...index.keys()].map((p) => ({ path: p }));
+      // Include skipped files in the resolver so they resolve as "exists" not "missing"
+      const allPaths = [...index.keys(), ...skipped.map((s) => s.path)];
+      const resolverIndex = buildResolverIndex(allPaths);
 
       for (const [filePath, entry] of index) {
         const sourceDir = path.dirname(filePath);
         const resolvedTargets: string[] = [];
 
         for (const target of entry.outgoingTargets) {
-          const res = await resolveTarget(vault, target, sourceDir, fileList);
+          const res = await resolveTarget(vault, target, sourceDir, undefined, resolverIndex);
           const edgeKey = `${filePath}→${target}`;
           if (res.status === "resolved" && res.path) {
             resolvedTargets.push(res.path);
@@ -86,7 +90,7 @@ export function registerGraphTools(server: McpServer, ctx: VaultContext, _config
       const queue: Array<{ nodePath: string; d: number }> = [{ nodePath: startPath, d: 0 }];
       visited.add(startPath);
 
-      while (queue.length > 0 && nodes.length < MAX_NODES) {
+      while (queue.length > 0 && nodes.length < maxNodes) {
         const { nodePath, d } = queue.shift()!;
         const entry = index.get(nodePath);
         const node: GraphNode = {
@@ -94,11 +98,12 @@ export function registerGraphTools(server: McpServer, ctx: VaultContext, _config
           title: entry?.title || path.basename(nodePath, ".md"),
           depth: d,
         };
-        if (includeContent && entry) {
+        // Only include content for root and first-hop nodes to limit payload
+        if (includeContent && entry && d <= 1) {
           try {
             const raw = await vault.readFile(nodePath);
             const { body } = parseNote(raw);
-            node.content = body.slice(0, 500);
+            node.content = body.slice(0, MAX_CONTENT_CHARS);
           } catch {
             // skip
           }
@@ -137,7 +142,7 @@ export function registerGraphTools(server: McpServer, ctx: VaultContext, _config
         }
 
         for (const neighbor of neighbors) {
-          if (!visited.has(neighbor) && index.has(neighbor) && nodes.length + queue.length < MAX_NODES) {
+          if (!visited.has(neighbor) && index.has(neighbor) && nodes.length + queue.length < maxNodes) {
             visited.add(neighbor);
             queue.push({ nodePath: neighbor, d: d + 1 });
           }
@@ -153,7 +158,7 @@ export function registerGraphTools(server: McpServer, ctx: VaultContext, _config
         return true;
       });
 
-      const result = {
+      const result: Record<string, unknown> = {
         root: startPath,
         depth,
         direction,
@@ -166,9 +171,12 @@ export function registerGraphTools(server: McpServer, ctx: VaultContext, _config
           edges: uniqueEdges,
         },
       };
+      if (skipped.length > 0) {
+        result.skippedFiles = skipped.length;
+      }
 
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text" as const, text: JSON.stringify(result) }],
       };
     }
   );

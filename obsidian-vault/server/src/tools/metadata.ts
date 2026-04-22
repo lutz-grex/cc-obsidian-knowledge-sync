@@ -107,26 +107,33 @@ export function registerMetadataTools(server: McpServer, ctx: VaultContext, conf
         const tagCounts = new Map<string, number>();
         let skippedFiles = 0;
         const files = await vault.listAllMarkdownFiles();
+        const BATCH = 20;
 
-        for (const file of files) {
-          try {
-            const content = await vault.readFile(file.path);
-            const { frontmatter, body } = parseNote(content);
-            const tags = fmStringArray(frontmatter, "tags");
-            for (const tag of tags) {
+        for (let i = 0; i < files.length; i += BATCH) {
+          const batch = files.slice(i, i + BATCH);
+          const results = await Promise.all(batch.map(async (file) => {
+            try {
+              const content = await vault.readFile(file.path);
+              const { frontmatter, body } = parseNote(content);
+              const tags = fmStringArray(frontmatter, "tags");
+              const inlineTags = body.match(/(?:^|\s)#([a-zA-Z][\w-/]*)(?=\s|$)/gm);
+              return { tags, inlineTags, error: false };
+            } catch (err: unknown) {
+              process.stderr.write(`[vault_tags] skipped ${file.path}: ${err}\n`);
+              return { tags: [] as string[], inlineTags: null, error: true };
+            }
+          }));
+          for (const r of results) {
+            if (r.error) { skippedFiles++; continue; }
+            for (const tag of r.tags) {
               tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
             }
-            // Check inline tags (#tag) in body only — not frontmatter (avoids double-counting)
-            const inlineTags = body.match(/(?:^|\s)#([a-zA-Z][\w-/]*)(?=\s|$)/gm);
-            if (inlineTags) {
-              for (const match of inlineTags) {
-                const tag = match.trim().slice(1); // remove #
+            if (r.inlineTags) {
+              for (const match of r.inlineTags) {
+                const tag = match.trim().slice(1);
                 tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
               }
             }
-          } catch (err: unknown) {
-            skippedFiles++;
-            process.stderr.write(`[vault_tags] skipped ${file.path}: ${err}\n`);
           }
         }
 
@@ -154,55 +161,66 @@ export function registerMetadataTools(server: McpServer, ctx: VaultContext, conf
 
         const normalizedOld = oldTag.replace(/^#/, "");
         const normalizedNew = newTag.replace(/^#/, "");
-        let filesUpdated = 0;
         const affectedPaths: string[] = [];
 
         const files = await vault.listAllMarkdownFiles();
+        const BATCH = 20;
 
-        for (const file of files) {
-          try {
-            let content = await vault.readFile(file.path);
-            let modified = false;
+        // Phase 1: read + compute changes in batches
+        const changes: Array<{ path: string; content: string }> = [];
+        for (let i = 0; i < files.length; i += BATCH) {
+          const batch = files.slice(i, i + BATCH);
+          const results = await Promise.all(batch.map(async (file) => {
+            try {
+              let content = await vault.readFile(file.path);
+              let modified = false;
 
-            // Update frontmatter tags
-            const parsed = parseNote(content);
-            if (parsed.frontmatter) {
-              const tags = fmStringArray(parsed.frontmatter, "tags");
-              let tagModified = false;
-              for (let i = 0; i < tags.length; i++) {
-                if (tags[i] === normalizedOld) {
-                  tags[i] = normalizedNew;
-                  tagModified = true;
+              const parsed = parseNote(content);
+              if (parsed.frontmatter) {
+                const tags = fmStringArray(parsed.frontmatter, "tags");
+                let tagModified = false;
+                for (let ti = 0; ti < tags.length; ti++) {
+                  if (tags[ti] === normalizedOld) {
+                    tags[ti] = normalizedNew;
+                    tagModified = true;
+                  }
+                }
+                if (tagModified) {
+                  parsed.frontmatter.tags = tags;
+                  content = serializeNote(parsed.frontmatter, parsed.body);
+                  modified = true;
                 }
               }
-              if (tagModified) {
-                parsed.frontmatter.tags = tags;
-                content = serializeNote(parsed.frontmatter, parsed.body);
+
+              const replaced = content.replace(
+                new RegExp(`(^|\\s)#${escapeRegex(normalizedOld)}(?=\\s|$)`, "g"),
+                `$1#${normalizedNew}`
+              );
+              if (replaced !== content) {
+                content = replaced;
                 modified = true;
               }
-            }
 
-            // Update inline tags
-            const replaced = content.replace(
-              new RegExp(`(^|\\s)#${escapeRegex(normalizedOld)}(?=\\s|$)`, "g"),
-              `$1#${normalizedNew}`
-            );
-            if (replaced !== content) {
-              content = replaced;
-              modified = true;
+              return modified ? { path: file.path, content } : null;
+            } catch (err: unknown) {
+              process.stderr.write(`[vault_tags rename] skipped ${file.path}: ${err}\n`);
+              return null;
             }
-
-            if (modified) {
-              if (!dryRun) {
-                await vault.writeFile(file.path, content);
-              }
-              filesUpdated++;
-              affectedPaths.push(file.path);
-            }
-          } catch (err: unknown) {
-            process.stderr.write(`[vault_tags rename] skipped ${file.path}: ${err}\n`);
+          }));
+          for (const r of results) {
+            if (r) { changes.push(r); affectedPaths.push(r.path); }
           }
         }
+
+        // Phase 2: batch writes
+        if (!dryRun) {
+          for (let i = 0; i < changes.length; i += BATCH) {
+            const batch = changes.slice(i, i + BATCH);
+            await Promise.all(batch.map((c) => vault.writeFile(c.path, c.content)));
+          }
+        }
+
+        const filesUpdated = changes.length;
 
         if (dryRun) {
           const fileList = affectedPaths.length > 0
