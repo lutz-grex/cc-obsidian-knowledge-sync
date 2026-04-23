@@ -1,10 +1,38 @@
 {
   "name": "obsidian-vault",
   "version": "1.0.0",
-  "description": "Obsidian vault integration for Claude Code — session capture, knowledge synthesis, vault search, and link management",
+  "description": "Obsidian vault integration for Claude Code — session capture, knowledge synthesis, vault search, link management, and team knowledge sharing",
   "author": {
-    "name": "Lutz"
+    "name": "Lutz",
+    "url": "https://github.com/lutz-grex"
   },
   "license": "MIT",
-  "keywords": ["obsidian", "knowledge-management", "vault", "pkm", "session-notes"]
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lutz-grex/cc-obsidian-knowledge-sync"
+  },
+  "homepage": "https://github.com/lutz-grex/cc-obsidian-knowledge-sync#readme",
+  "bugs": "https://github.com/lutz-grex/cc-obsidian-knowledge-sync/issues",
+  "keywords": [
+    "obsidian",
+    "knowledge-management",
+    "vault",
+    "pkm",
+    "session-notes",
+    "team-knowledge",
+    "daily-notes",
+    "wikilinks"
+  ],
+  "categories": [
+    "knowledge-management",
+    "productivity",
+    "note-taking"
+  ],
+  "engines": {
+    "claude-code": ">=1.0.0"
+  },
+  "dependencies": {
+    "runtime": ["bun >= 1.0"],
+    "system": ["ripgrep", "git"]
+  }
 }

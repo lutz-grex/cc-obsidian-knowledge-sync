@@ -1,4 +1,4 @@
-# obsidian-vault
+# cc-obsidian-knowledge-sync
 
 Obsidian vault integration for Claude Code — session capture, knowledge synthesis, vault search, link management, and team knowledge sharing.
 
@@ -20,8 +20,8 @@ Or follow the manual steps below.
 ### 1. Build the server
 
 ```bash
-git clone <this-repo>
-cd claude-code-plugins/obsidian-vault/server
+git clone https://github.com/lutz-grex/cc-obsidian-knowledge-sync.git
+cd cc-obsidian-knowledge-sync/server
 bun run setup              # install + build
 ```
 
@@ -29,7 +29,7 @@ bun run setup              # install + build
 
 ```bash
 mkdir -p ~/.config/obsidian-claude
-cp ../config.example.json ~/.config/obsidian-claude/config.json
+cp config.example.json ~/.config/obsidian-claude/config.json
 ```
 
 Edit `~/.config/obsidian-claude/config.json`:
@@ -47,7 +47,7 @@ Edit `~/.config/obsidian-claude/config.json`:
 **Option A: Install as a plugin (recommended)**
 
 ```bash
-cd claude-code-plugins/obsidian-vault
+cd cc-obsidian-knowledge-sync
 claude plugin add .
 ```
 
@@ -62,7 +62,7 @@ Add to your Claude Code MCP settings (`~/.claude/settings.json` or project `.mcp
   "mcpServers": {
     "obsidian-vault": {
       "command": "bun",
-      "args": ["/absolute/path/to/claude-code-plugins/obsidian-vault/server/dist/index.js"]
+      "args": ["/absolute/path/to/cc-obsidian-knowledge-sync/server/dist/index.js"]
     }
   }
 }
@@ -221,7 +221,7 @@ The server registers 19 tools:
 ## Architecture
 
 ```
-obsidian-vault/
+cc-obsidian-knowledge-sync/
 ├── .claude-plugin/
 │   ├── plugin.json          # Plugin metadata
 │   └── marketplace.json     # Marketplace config
@@ -254,7 +254,7 @@ obsidian-vault/
 ## Development
 
 ```bash
-cd obsidian-vault/server
+cd server
 bun run dev       # Watch mode (tsc --watch)
 bun run build     # Production build
 bun run check     # Typecheck + tests
